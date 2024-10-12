@@ -16,8 +16,43 @@ from datetime import datetime
 from PIL import Image
 import numpy as np
 pyautogui.FAILSAFE = False
+global upscale_factor, upscaling_type, gamma
+#upscale_factor = 2
+
+import configparser
+config = configparser.ConfigParser(allow_no_value=True)
+config.read('config.txt')
+
+# Get the configuration values from the DEFAULT section
+upscale_factor = config.getfloat('DEFAULT', 'upscale_factor')
+upscaling_type = config.getint('DEFAULT', 'upscaling_type')
+gamma = config.getfloat('DEFAULT', 'gamma')
+
+if upscale_factor < 1:
+    print("upscale_factor must be 1 or greater.")
+    time.sleep(1)
+    exit()
+
+if upscaling_type not in [1, 2, 3]:
+    print("upscaling_type must be 1 (linear), 2 (vitaScaler single pass), or 3 (vitaScaler double pass).")
+    time.sleep(1)
+    exit()
+
+print(f"Upscale Factor: {upscale_factor}")
+print(f"Upscaling Type: {upscaling_type}")
+print(f"Gamma: {gamma}")
+print(f"Applying upscaling factor of {upscale_factor} and gamma correction {gamma}.")
+if upscaling_type == 1:
+    print("Using linear upscaler.")
+elif upscaling_type == 2:
+    print("Using vitaScaler single pass.")
+elif upscaling_type == 3:
+    print("Using vitaScaler double pass.")
+
 
 def screenshot_capture(raw_frame, scaled_frame):
+    raw_frame = cv2.resize(raw_frame, (GetSystemMetrics(0), GetSystemMetrics(1)), interpolation=cv2.INTER_NEAREST)
+    scaled_frame = cv2.resize(scaled_frame, (GetSystemMetrics(0), GetSystemMetrics(1)), interpolation=cv2.INTER_LINEAR)
     # Create the screenshots directory if it doesn't exist
     screenshot_dir = "vitaScreenshots"
     if not os.path.exists(screenshot_dir):
@@ -119,7 +154,7 @@ def load_texture(texture_id, frame):
 
 def upscale_image(frame, scale_factor=2):
     height, width = frame.shape[:2]
-    return cv2.resize(frame, (width * scale_factor, height * scale_factor), interpolation=cv2.INTER_LINEAR)
+    return cv2.resize(frame, (int(width * scale_factor), int(height * scale_factor)), interpolation=cv2.INTER_LINEAR)
 
 def detect_edges(frame):
     gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -140,15 +175,29 @@ def adjust_gamma(image, gamma=0.82):
     return cv2.LUT(image, table)
 
 def process_frame(frame):
+    global upscale_factor, gamma, upscaling_type
     height, width = frame.shape[:2]
-    edges = upscale_image(detect_edges(frame))
-    frame = variable_blur(upscale_image(frame), edges, ksize=5)
-    frame = adjust_gamma(frame)
-    return frame
+    if upscaling_type == 2:
+        frame = upscale_image(frame, upscale_factor)
+        edges = detect_edges(frame)
+        frame = variable_blur(frame, edges, ksize=5)
+        frame = adjust_gamma(frame, gamma)
+        return frame
+    if upscaling_type == 3:
+        edges = detect_edges(frame)
+        frame = variable_blur(frame, edges, ksize=3)
+        frame = upscale_image(frame, upscale_factor)
+        edges = detect_edges(frame)
+        frame = variable_blur(frame, edges, ksize=5)
+        frame = adjust_gamma(frame, gamma)
+        return frame
 
 def render_frame(frame, shader_program, vao, texture_id):
-    global processed_frame
-    processed_frame = process_frame(frame)  # Process the frame here
+    global processed_frame, upscaling_type, gamma
+    if upscaling_type != 1:
+        processed_frame = process_frame(frame)  # Process the frame here
+    else:
+        processed_frame = adjust_gamma(frame, gamma)
     load_texture(texture_id, processed_frame)  # Update the texture with the processed frame
 
     glUseProgram(shader_program)
@@ -191,6 +240,7 @@ def display_splash_screen(shader_program, vao, texture_id, splash_image, window)
     glfw.swap_buffers(window)
 
 def display_psvita_stream(device_index):
+    global upscale_factor
     global halt_flag
     global processed_frame
     cap = cv2.VideoCapture(device_index, cv2.CAP_DSHOW)
