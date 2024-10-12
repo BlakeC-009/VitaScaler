@@ -1,0 +1,6 @@
+numpy
+pygame
+PyOpenGL
+opencv-python
+Pillow
+pyautogui
