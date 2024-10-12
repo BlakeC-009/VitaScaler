@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Define the virtual environment directory name
-VENV_DIR="venv"
+VENV_DIR="vita_scaler_env"
 
 # Check if the virtual environment already exists
 if [ ! -d "$VENV_DIR" ]; then
@@ -19,7 +19,7 @@ pip install --upgrade pip
 pip install -r requirements.txt
 
 # Run the Python script
-python main.py
+python vita_scaler.py
 
 # Deactivate the virtual environment after script execution
 deactivate
