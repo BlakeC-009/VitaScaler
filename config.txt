@@ -3,5 +3,9 @@
 #lower to increase performance (minimum of 1 and above 3 causes performance issues)
 upscale_factor = 2
 #1: linear upscaler 2:vitaScaler single pass 3:vitaScaler double pass
-upscaling_type = 3
+upscaling_type = 2
 gamma = 0.82
+taa = true
+taa_alpha_1 = 0.24
+taa_alpha_2 = 0.2
+taa_alpha_3 = 0.12

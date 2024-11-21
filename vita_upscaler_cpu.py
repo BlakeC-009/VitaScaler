@@ -16,7 +16,7 @@ from datetime import datetime
 from PIL import Image
 import numpy as np
 pyautogui.FAILSAFE = False
-global upscale_factor, upscaling_type, gamma, enable_taa
+global upscale_factor, upscaling_type, gamma
 #upscale_factor = 2
 
 import configparser
@@ -25,46 +25,8 @@ config.read('config.txt')
 
 # Get the configuration values from the DEFAULT section
 upscale_factor = config.getfloat('DEFAULT', 'upscale_factor')
-enable_taa  = config.getboolean('DEFAULT', 'taa')
 upscaling_type = config.getint('DEFAULT', 'upscaling_type')
 gamma = config.getfloat('DEFAULT', 'gamma')
-
-# Global variables to store previous frames and alpha values
-previous_frame_1 = None
-previous_frame_2 = None
-previous_frame_3 = None
-
-try:
-    taa_alpha_1 = config.getfloat('DEFAULT', 'taa_alpha_1')
-    taa_alpha_2 = config.getfloat('DEFAULT', 'taa_alpha_2')
-    taa_alpha_3 = config.getfloat('DEFAULT', 'taa_alpha_3')
-except:
-    print("Incorrect taa values")
-    taa_alpha_1 = 0.24
-    taa_alpha_2 = 0.18
-    taa_alpha_3 = 0.12
-print(taa_alpha_1, taa_alpha_2, taa_alpha_3)
-
-def check_ocl():
-    try:
-        # Returns True if OpenCL is present
-        ocl = cv2.ocl.haveOpenCL()
-        # Prints whether OpenCL is present
-        print("OpenCL Supported?: ", end='')
-        print(ocl)
-        print()
-        return ocl
-
-    except cv2.error as e:
-        print('Error:')
-        
-ocl = check_ocl()
-# Enables use of OpenCL by OpenCV if present
-if ocl == True:
-    print('Now enabling OpenCL support')
-    cv2.ocl.setUseOpenCL(True)
-    print("Has OpenCL been Enabled?: ", end='')
-    print(cv2.ocl.useOpenCL())
 
 if upscale_factor < 1:
     print("upscale_factor must be 1 or greater.")
@@ -79,7 +41,6 @@ if upscaling_type not in [1, 2, 3]:
 print(f"Upscale Factor: {upscale_factor}")
 print(f"Upscaling Type: {upscaling_type}")
 print(f"Gamma: {gamma}")
-print("Taa: ", enable_taa)
 print(f"Applying upscaling factor of {upscale_factor} and gamma correction {gamma}.")
 if upscaling_type == 1:
     print("Using linear upscaler.")
@@ -192,114 +153,44 @@ def load_texture(texture_id, frame):
     glBindTexture(GL_TEXTURE_2D, 0)
 
 def upscale_image(frame, scale_factor=2):
-    """
-    Upscale an image using OpenCL-accelerated cv2.UMat.
-    """
-    height, width = frame.get().shape[:2]  # Get dimensions from the numpy representation
-    upscaled = cv2.resize(frame, (int(width * scale_factor), int(height * scale_factor)), interpolation=cv2.INTER_LINEAR)
-    return upscaled
+    height, width = frame.shape[:2]
+    return cv2.resize(frame, (int(width * scale_factor), int(height * scale_factor)), interpolation=cv2.INTER_LINEAR)
 
 def detect_edges(frame):
-    """
-    Detect edges using OpenCL-accelerated cv2.Canny.
-    """
-    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)  # Convert to grayscale
-    edges = cv2.Canny(gray_frame, 100, 200)  # Perform edge detection
-    _, binary_mask = cv2.threshold(edges, 100, 255, cv2.THRESH_BINARY)  # Threshold the edges
+    gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray_frame, 100, 200)
+    _, binary_mask = cv2.threshold(edges, 100, 255, cv2.THRESH_BINARY)
     return binary_mask
 
 def variable_blur(frame, edges, ksize=3):
-    """
-    Apply variable Gaussian blur based on edges using OpenCL acceleration.
-    """
-    blurred_frame = cv2.GaussianBlur(frame, (ksize, ksize), 0)  # Blur the frame
-    mask = cv2.bitwise_not(edges)  # Invert the edges mask
-    mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)  # Convert to 3 channels
-    blurred_with_edges = cv2.addWeighted(frame, 1.0, blurred_frame, 0.0, 0, mask)
+    blurred_frame = cv2.GaussianBlur(frame, (ksize, ksize), 0)
+    mask = cv2.bitwise_not(edges)
+    mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    blurred_with_edges = np.where(mask == 255, frame, blurred_frame)
     return blurred_with_edges
 
-def precompute_gamma_lut(gamma=0.82):
+def adjust_gamma(image, gamma=0.82):
     invGamma = 1.0 / gamma
-    return np.array([((i / 255.0) ** invGamma) * 255 for i in range(256)]).astype("uint8")
-
-# Global gamma LUT
-gamma_lut = precompute_gamma_lut(gamma)
-
-def adjust_gamma(frame, gamma=0.82):
-    """
-    Adjust gamma using the precomputed LUT.
-    """
-    return cv2.LUT(frame, gamma_lut)
-
-def apply_taa(frame):
-    """
-    Apply Temporal Anti-Aliasing (TAA) using weighted averaging of pixels.
-    """
-    try:
-        global previous_frame_1, previous_frame_2, previous_frame_3
-        global taa_alpha_1, taa_alpha_2, taa_alpha_3
-
-        # Initialize previous frames if they're not yet set
-        if previous_frame_1 is None:
-            previous_frame_1 = cv2.UMat(frame)
-            return frame
-        if previous_frame_2 is None:
-            previous_frame_2 = cv2.UMat(frame)
-            return frame
-        if previous_frame_3 is None:
-            previous_frame_3 = cv2.UMat(frame)
-            return frame
-
-        # Calculate the total weight for normalization
-        total_weight = 1.0 + taa_alpha_1 + taa_alpha_2 + taa_alpha_3
-
-        # Compute the weighted average of the frames
-        blended_frame = cv2.addWeighted(frame, 1.0 / total_weight, previous_frame_1, taa_alpha_1 / total_weight, 0)
-        blended_frame = cv2.addWeighted(blended_frame, 1.0, previous_frame_2, taa_alpha_2 / total_weight, 0)
-        blended_frame = cv2.addWeighted(blended_frame, 1.0, previous_frame_3, taa_alpha_3 / total_weight, 0)
-
-        # Update previous frames for the next iteration
-        previous_frame_1 = cv2.UMat(previous_frame_2.get())
-        previous_frame_2 = cv2.UMat(previous_frame_3.get())
-        previous_frame_3 = cv2.UMat(frame)
-
-        return blended_frame
-
-    except Exception as e:
-        print("TAA Error:", e)
-        return frame
+    table = np.array([((i / 255.0) ** invGamma) * 255 for i in np.arange(0, 256)]).astype("uint8")
+    return cv2.LUT(image, table)
 
 def process_frame(frame):
-    """
-    Process a frame using the OpenCL-accelerated pipeline with optimizations.
-    """
-    global upscale_factor, gamma, upscaling_type, enable_taa, gamma_lut
-
-    # Convert frame to UMat at the start
-    frame_umat = cv2.UMat(frame)
-
-    # Apply upscaling and edge detection
+    global upscale_factor, gamma, upscaling_type
+    height, width = frame.shape[:2]
     if upscaling_type == 2:
-        frame_umat = upscale_image(frame_umat, upscale_factor)
-        edges = detect_edges(frame_umat)
-        frame_umat = variable_blur(frame_umat, edges, ksize=5)
-    elif upscaling_type == 3:
-        edges = detect_edges(frame_umat)
-        frame_umat = variable_blur(frame_umat, edges, ksize=3)
-        frame_umat = upscale_image(frame_umat, upscale_factor)
-        edges = detect_edges(frame_umat)
-        frame_umat = variable_blur(frame_umat, edges, ksize=5)
-
-    # Apply gamma correction
-    frame_umat = adjust_gamma(frame_umat, gamma)
-
-    # Apply Temporal Anti-Aliasing (if enabled)
-    if enable_taa:
-        frame_umat = apply_taa(frame_umat)
-
-    # Convert back to numpy array only at the end
-    return frame_umat.get()
-
+        frame = upscale_image(frame, upscale_factor)
+        edges = detect_edges(frame)
+        frame = variable_blur(frame, edges, ksize=5)
+        frame = adjust_gamma(frame, gamma)
+        return frame
+    if upscaling_type == 3:
+        edges = detect_edges(frame)
+        frame = variable_blur(frame, edges, ksize=3)
+        frame = upscale_image(frame, upscale_factor)
+        edges = detect_edges(frame)
+        frame = variable_blur(frame, edges, ksize=5)
+        frame = adjust_gamma(frame, gamma)
+        return frame
 
 def render_frame(frame, shader_program, vao, texture_id):
     global processed_frame, upscaling_type, gamma
@@ -448,4 +339,3 @@ if __name__ == "__main__":
 
     # Start the video stream
     display_psvita_stream(selected_device)
-
